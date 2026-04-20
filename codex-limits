@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const readline = require('node:readline');
+
+function expandHome(inputPath) {
+  if (!inputPath.startsWith('~')) {
+    return inputPath;
+  }
+
+  return path.join(os.homedir(), inputPath.slice(1));
+}
+
+function getSessionsDir() {
+  return expandHome(process.env.CODEX_SESSIONS_DIR || '~/.codex/sessions');
+}
+
+function findNewestSessionFile(rootDir) {
+  if (!fs.existsSync(rootDir)) {
+    throw new Error(`Codex sessions directory does not exist: ${rootDir}`);
+  }
+
+  let newest = null;
+  const stack = [rootDir];
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop();
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+        continue;
+      }
+
+      const stats = fs.statSync(entryPath);
+      if (!newest || stats.mtimeMs > newest.mtimeMs) {
+        newest = { path: entryPath, mtimeMs: stats.mtimeMs };
+      }
+    }
+  }
+
+  if (!newest) {
+    throw new Error(`No Codex session JSONL files found under ${rootDir}`);
+  }
+
+  return newest.path;
+}
+
+function roundRemainingPercent(usedPercent) {
+  if (typeof usedPercent !== 'number' || Number.isNaN(usedPercent)) {
+    return null;
+  }
+
+  return Math.round(Math.max(0, Math.min(100, 100 - usedPercent)));
+}
+
+function formatLocalTimestamp(unixSeconds) {
+  if (typeof unixSeconds !== 'number') {
+    return null;
+  }
+
+  const date = new Date(unixSeconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const pad = (value) => String(Math.trunc(Math.abs(value))).padStart(2, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const offsetHours = pad(Math.floor(Math.abs(offsetMinutes) / 60));
+  const offsetRemainderMinutes = pad(Math.abs(offsetMinutes) % 60);
+
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`,
+    `${sign}${offsetHours}:${offsetRemainderMinutes}`,
+  ].join('');
+}
+
+function mapWindow(window) {
+  if (!window || typeof window !== 'object') {
+    return null;
+  }
+
+  return {
+    remaining_percent: roundRemainingPercent(window.used_percent),
+    resets_at_unix: typeof window.resets_at === 'number' ? window.resets_at : null,
+    resets_at_local: formatLocalTimestamp(window.resets_at),
+  };
+}
+
+async function readLatestCodexRateLimits(sessionFile) {
+  const input = fs.createReadStream(sessionFile, { encoding: 'utf8' });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  let latest = null;
+
+  for await (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const rateLimits = parsed?.payload?.rate_limits;
+    if (
+      parsed?.type !== 'event_msg' ||
+      parsed?.payload?.type !== 'token_count' ||
+      !rateLimits ||
+      rateLimits.limit_id !== 'codex'
+    ) {
+      continue;
+    }
+
+    latest = {
+      timestamp: parsed.timestamp || null,
+      rate_limits: rateLimits,
+    };
+  }
+
+  if (!latest) {
+    throw new Error(`No codex token_count rate limits found in ${sessionFile}`);
+  }
+
+  return latest;
+}
+
+async function buildOutput() {
+  const sessionFile = findNewestSessionFile(getSessionsDir());
+  const latest = await readLatestCodexRateLimits(sessionFile);
+
+  return {
+    session_file: sessionFile,
+    captured_at: latest.timestamp,
+    five_hour: mapWindow(latest.rate_limits.primary),
+    weekly: mapWindow(latest.rate_limits.secondary),
+  };
+}
+
+async function main() {
+  const output = await buildOutput();
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  buildOutput,
+  findNewestSessionFile,
+  formatLocalTimestamp,
+  mapWindow,
+  readLatestCodexRateLimits,
+  roundRemainingPercent,
+};

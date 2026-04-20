@@ -171,7 +171,7 @@ test('prints compact byobu status text from the latest session', () => {
   assert.equal(result.stderr, '');
 });
 
-test('escapes percent when running under byobu so the status line keeps the percent sign', () => {
+test('formats a themed byobu badge and escapes percent for tmux status output', () => {
   const sessionsDir = makeTempSessionsDir();
   writeSessionFile(
     sessionsDir,
@@ -197,11 +197,95 @@ test('escapes percent when running under byobu so the status line keeps the perc
     CODEX_STATUS_BYOBU: '1',
     CODEX_SESSIONS_DIR: sessionsDir,
     BYOBU_NOW_UNIX: '1776828712',
+    BYOBU_ACCENT: '#75507B',
+    BYOBU_DARK: '#333333',
+    BYOBU_LIGHT: '#EEEEEE',
     TZ: 'Asia/Tokyo',
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '74%%(1d16h)');
+  assert.equal(
+    result.stdout.trim(),
+    '#[default]#[fg=#EEEEEE,bg=#2F855A]74%%(1d16h)#[default]#[fg=#EEEEEE,bg=#333333]',
+  );
+  assert.equal(result.stderr, '');
+});
+
+test('uses a muted amber badge when weekly remaining is between 20 and 49 percent', () => {
+  const sessionsDir = makeTempSessionsDir();
+  writeSessionFile(
+    sessionsDir,
+    '2026/04/20/rollout-newest.jsonl',
+    [
+      JSON.stringify({
+        timestamp: '2026-04-19T15:48:56.448Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex',
+            primary: { used_percent: 4, window_minutes: 300, resets_at: 1776629148 },
+            secondary: { used_percent: 65, window_minutes: 10080, resets_at: 1776972712 },
+          },
+        },
+      }),
+    ],
+    Date.UTC(2026, 3, 19, 15, 49, 0),
+  );
+
+  const result = runNodeScript(byobuScriptPath, {
+    CODEX_STATUS_BYOBU: '1',
+    CODEX_SESSIONS_DIR: sessionsDir,
+    BYOBU_NOW_UNIX: '1776828712',
+    BYOBU_DARK: '#333333',
+    BYOBU_LIGHT: '#EEEEEE',
+    TZ: 'Asia/Tokyo',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    result.stdout.trim(),
+    '#[default]#[fg=#EEEEEE,bg=#C9922E]35%%(1d16h)#[default]#[fg=#EEEEEE,bg=#333333]',
+  );
+  assert.equal(result.stderr, '');
+});
+
+test('uses a muted red badge when weekly remaining is below 20 percent', () => {
+  const sessionsDir = makeTempSessionsDir();
+  writeSessionFile(
+    sessionsDir,
+    '2026/04/20/rollout-newest.jsonl',
+    [
+      JSON.stringify({
+        timestamp: '2026-04-19T15:48:56.448Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex',
+            primary: { used_percent: 4, window_minutes: 300, resets_at: 1776629148 },
+            secondary: { used_percent: 90, window_minutes: 10080, resets_at: 1776972712 },
+          },
+        },
+      }),
+    ],
+    Date.UTC(2026, 3, 19, 15, 49, 0),
+  );
+
+  const result = runNodeScript(byobuScriptPath, {
+    CODEX_STATUS_BYOBU: '1',
+    CODEX_SESSIONS_DIR: sessionsDir,
+    BYOBU_NOW_UNIX: '1776828712',
+    BYOBU_DARK: '#333333',
+    BYOBU_LIGHT: '#EEEEEE',
+    TZ: 'Asia/Tokyo',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    result.stdout.trim(),
+    '#[default]#[fg=#EEEEEE,bg=#C0565B]10%%(1d16h)#[default]#[fg=#EEEEEE,bg=#333333]',
+  );
   assert.equal(result.stderr, '');
 });
 
@@ -268,10 +352,16 @@ test('installer enables byobu custom status and links the formatter script', () 
   const wrapperResult = runExecutable(linkPath, {
     CODEX_SESSIONS_DIR: sessionsDir,
     BYOBU_NOW_UNIX: '1776828712',
+    BYOBU_ACCENT: '#75507B',
+    BYOBU_DARK: '#333333',
+    BYOBU_LIGHT: '#EEEEEE',
     TZ: 'Asia/Tokyo',
   });
   assert.equal(wrapperResult.status, 0, wrapperResult.stderr);
-  assert.equal(wrapperResult.stdout.trim(), '74%%(1d16h)');
+  assert.equal(
+    wrapperResult.stdout.trim(),
+    '#[default]#[fg=#EEEEEE,bg=#2F855A]74%%(1d16h)#[default]#[fg=#EEEEEE,bg=#333333]',
+  );
   assert.equal(wrapperResult.stderr, '');
 });
 

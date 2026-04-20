@@ -69,6 +69,7 @@ cd /path/to/codex-status
 - `3d18h`: リセットまで 3 日 18 時間
 
 1 時間未満しか残っていない場合は `59m` のように分表示になります。
+Byobu 経由では、この文字列がデフォルトテーマのアクセント色を使った背景付きバッジで表示されます。
 
 ## Byobu への組み込み手順
 
@@ -87,6 +88,7 @@ cd /path/to/codex-status
 
 `300_` という接頭辞は Byobu の更新間隔です。つまり 300 秒ごと、約 5 分ごとに表示が更新されます。
 インストール後は Byobu 側が `~/.byobu/bin/codex-status/` のコピーを使うので、このリポジトリを別の場所へ移動しても Byobu 表示は壊れません。
+デフォルトでは `custom` を `date time` の直前へ置くので、右端の時計の少し左に Codex 残量が出ます。
 
 ### 2. 正しく入ったか確認する
 
@@ -107,6 +109,36 @@ byobu-status tmux_right
 ### 3. 既存セッションで表示を確認する
 
 Byobu をすでに開いている場合でも、通常は右下表示が次の更新タイミングで切り替わります。すぐ確認したい場合は、その Byobu セッションを表示し直すか、新しいウィンドウを開いて右下を見てください。
+
+## 表示順の変え方
+
+`custom` は Byobu の予約トークン名です。ここは名前を変える場所ではなく、「Codex 表示をどこへ置くか」を表しています。実際の表示に `custom` という文字が出るわけではありません。
+
+並び順を変えたいときは、`~/.byobu/status` の `tmux_right=` を編集して `custom` の位置だけ動かしてください。たとえば、現在のおすすめ配置は次の形です。
+
+```sh
+tmux_right="#network #disk_io #entropy raid reboot_required updates_available #apport #services #mail #users uptime #fan_speed #cpu_temp #battery #wifi_quality #processes #packages load_average #cpu_count #cpu_freq memory #swap disk #whoami #hostname #ip_address #time_utc custom date time"
+```
+
+もし時計よりもっと左へ寄せたいなら、たとえば `disk` の直後に移せます。
+
+```sh
+tmux_right="#network #disk_io #entropy raid reboot_required updates_available #apport #services #mail #users uptime #fan_speed #cpu_temp #battery #wifi_quality #processes #packages load_average #cpu_count #cpu_freq memory #swap disk custom #whoami #hostname #ip_address #time_utc date time"
+```
+
+この変更は `byobu-status tmux_right` を実行すればすぐ確認できます。通常は Byobu の右下表示も次の更新タイミングで追随します。
+
+## 色について
+
+Byobu 上の Codex 表示は、残量に応じて背景色が 3 段階で変わります。文字は通常ウェイトで、太字にはしません。
+
+- 残り `50%` 以上: くすみ寄りの緑 `#2F855A`
+- 残り `20%` 以上 `50%` 未満: 橙みのある黄色 `#C9922E`
+- 残り `20%` 未満: くすみ寄りの赤 `#C0565B`
+- 文字色: `BYOBU_LIGHT`
+- バッジ終了後の復帰色: `BYOBU_DARK`
+
+背景色は固定の 3 色ですが、文字色と復帰色は Byobu テーマに合わせます。つまり、Byobu 全体の明暗トーンは維持しつつ、Codex の残量だけが分かりやすく色分けされます。
 
 ## 仕組み
 

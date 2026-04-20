@@ -17,7 +17,7 @@ function getNowUnix() {
 }
 
 function runningInsideByobu() {
-  return process.env.CODEX_STATUS_BYOBU === '1';
+  return process.env.CODEX_STATUS_BYOBU === '1' && !process.stdout.isTTY;
 }
 
 function escapeForByobuPrintf(text) {
@@ -26,6 +26,40 @@ function escapeForByobuPrintf(text) {
   }
 
   return text.replace(/%/g, '%%');
+}
+
+function getByobuTheme() {
+  return {
+    dark: process.env.BYOBU_DARK || '#333333',
+    light: process.env.BYOBU_LIGHT || '#EEEEEE',
+  };
+}
+
+function getBadgeBackgroundColor(remainingPercent) {
+  if (typeof remainingPercent !== 'number' || !Number.isFinite(remainingPercent)) {
+    return '#75507B';
+  }
+
+  if (remainingPercent >= 50) {
+    return '#2F855A';
+  }
+
+  if (remainingPercent >= 20) {
+    return '#C9922E';
+  }
+
+  return '#C0565B';
+}
+
+function formatByobuBadge(text, remainingPercent, theme = getByobuTheme()) {
+  if (!runningInsideByobu()) {
+    return text;
+  }
+
+  return (
+    `#[default]#[fg=${theme.light},bg=${getBadgeBackgroundColor(remainingPercent)}]${escapeForByobuPrintf(text)}` +
+    `#[default]#[fg=${theme.light},bg=${theme.dark}]`
+  );
 }
 
 function formatResetDelta(resetUnix, nowUnix) {
@@ -64,7 +98,9 @@ function formatWeeklyStatus(weekly, nowUnix = getNowUnix()) {
 async function main() {
   try {
     const output = await buildOutput();
-    process.stdout.write(`${escapeForByobuPrintf(formatWeeklyStatus(output.weekly))}\n`);
+    process.stdout.write(
+      `${formatByobuBadge(formatWeeklyStatus(output.weekly), output?.weekly?.remaining_percent)}\n`,
+    );
   } catch {
     process.stdout.write('n/a\n');
   }
@@ -76,8 +112,11 @@ if (require.main === module) {
 
 module.exports = {
   escapeForByobuPrintf,
+  formatByobuBadge,
+  getBadgeBackgroundColor,
   formatResetDelta,
   formatWeeklyStatus,
+  getByobuTheme,
   getNowUnix,
   runningInsideByobu,
 };

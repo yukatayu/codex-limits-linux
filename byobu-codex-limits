@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+
+const { buildOutput } = require('./codex-limits');
+
+function getNowUnix() {
+  const override = process.env.BYOBU_NOW_UNIX;
+  if (!override) {
+    return Math.floor(Date.now() / 1000);
+  }
+
+  const parsed = Number(override);
+  if (!Number.isFinite(parsed)) {
+    return Math.floor(Date.now() / 1000);
+  }
+
+  return Math.floor(parsed);
+}
+
+function runningInsideByobu() {
+  return process.env.CODEX_STATUS_BYOBU === '1';
+}
+
+function escapeForByobuPrintf(text) {
+  if (!runningInsideByobu()) {
+    return text;
+  }
+
+  return text.replace(/%/g, '%%');
+}
+
+function formatResetDelta(resetUnix, nowUnix) {
+  if (typeof resetUnix !== 'number' || !Number.isFinite(resetUnix)) {
+    return null;
+  }
+
+  const remainingSeconds = Math.max(0, resetUnix - nowUnix);
+  const days = Math.floor(remainingSeconds / 86400);
+  const hours = Math.floor((remainingSeconds % 86400) / 3600);
+
+  if (days > 0) {
+    return `${days}d${hours}h`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+
+  return `${Math.ceil((remainingSeconds % 3600) / 60)}m`;
+}
+
+function formatWeeklyStatus(weekly, nowUnix = getNowUnix()) {
+  if (!weekly || typeof weekly.remaining_percent !== 'number') {
+    return 'n/a';
+  }
+
+  const delta = formatResetDelta(weekly.resets_at_unix, nowUnix);
+  if (!delta) {
+    return 'n/a';
+  }
+
+  return `${weekly.remaining_percent}%(${delta})`;
+}
+
+async function main() {
+  try {
+    const output = await buildOutput();
+    process.stdout.write(`${escapeForByobuPrintf(formatWeeklyStatus(output.weekly))}\n`);
+  } catch {
+    process.stdout.write('n/a\n');
+  }
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  escapeForByobuPrintf,
+  formatResetDelta,
+  formatWeeklyStatus,
+  getNowUnix,
+  runningInsideByobu,
+};

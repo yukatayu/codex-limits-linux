@@ -1,0 +1,223 @@
+#!/usr/bin/env node
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const DEFAULT_BYOBU_PREFIX = '/usr';
+const INSTALLED_SCRIPT_DIR = 'codex-status';
+const INSTALLED_FILES = ['codex-limits', 'byobu-codex-limits'];
+
+function resolveByobuDefaultStatus() {
+  const candidates = [];
+  const prefixes = [process.env.BYOBU_PREFIX, DEFAULT_BYOBU_PREFIX, '/usr/local'].filter(Boolean);
+
+  for (const prefix of prefixes) {
+    candidates.push(path.join(prefix, 'share', 'byobu', 'status', 'status'));
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Could not find Byobu default status file. Checked: ${candidates.join(', ')}`);
+}
+
+function getByobuConfigDir() {
+  return process.env.BYOBU_CONFIG_DIR || path.join(os.homedir(), '.byobu');
+}
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function ensureStatusFile(statusFile) {
+  if (fs.existsSync(statusFile)) {
+    return;
+  }
+
+  ensureDir(path.dirname(statusFile));
+  fs.copyFileSync(resolveByobuDefaultStatus(), statusFile);
+}
+
+function enableCustomInTmuxRight(statusContents) {
+  const lines = statusContents.split(/\r?\n/);
+  let found = false;
+
+  const updated = lines.map((line) => {
+    if (!line.startsWith('tmux_right=')) {
+      return line;
+    }
+
+    found = true;
+    const match = line.match(/^tmux_right="(.*)"$/);
+    if (!match) {
+      return line;
+    }
+
+    const tokens = match[1]
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((token) => token !== 'custom' && token !== '#custom');
+
+    const dateIndex = tokens.indexOf('date');
+    const insertIndex = dateIndex >= 0 ? dateIndex : tokens.length;
+    tokens.splice(insertIndex, 0, 'custom');
+
+    return `tmux_right="${tokens.join(' ')}"`;
+  });
+
+  if (!found) {
+    updated.push('tmux_right="custom"');
+  }
+
+  return `${updated.join('\n').replace(/\n+$/, '')}\n`;
+}
+
+function backupPath(targetPath) {
+  const dirPath = path.dirname(targetPath);
+  const baseName = path.basename(targetPath);
+  const timestamp = new Date().toISOString().replace(/[:]/g, '-');
+  return path.join(dirPath, `backup.${baseName}.${timestamp}`);
+}
+
+function moveToSafeBackupPath(targetPath) {
+  const backup = backupPath(targetPath);
+  fs.renameSync(targetPath, backup);
+  return backup;
+}
+
+function disableLegacyMatchingBackups(binDir, baseName) {
+  const entries = fs.readdirSync(binDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.name.startsWith(`${baseName}.bak.`)) {
+      continue;
+    }
+
+    const sourcePath = path.join(binDir, entry.name);
+    const targetPath = path.join(binDir, `backup.${entry.name.replace(`${baseName}.bak.`, `${baseName}.`)}`);
+    fs.renameSync(sourcePath, targetPath);
+  }
+}
+
+function buildWrapperScript() {
+  return [
+    '#!/bin/sh',
+    '# Escape % for Byobu only when invoked through the custom status hook.',
+    'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)',
+    'CODEX_STATUS_BYOBU=1',
+    'export CODEX_STATUS_BYOBU',
+    `exec "$SCRIPT_DIR/${INSTALLED_SCRIPT_DIR}/byobu-codex-limits"`,
+    '',
+  ].join('\n');
+}
+
+function replaceWithWrapper(scriptPath) {
+  const desiredContents = buildWrapperScript();
+
+  try {
+    const current = fs.lstatSync(scriptPath);
+    if (current.isFile()) {
+      const existingContents = fs.readFileSync(scriptPath, 'utf8');
+      if (existingContents === desiredContents) {
+        fs.chmodSync(scriptPath, 0o755);
+        return null;
+      }
+    }
+
+    const backup = moveToSafeBackupPath(scriptPath);
+    fs.writeFileSync(scriptPath, desiredContents, { mode: 0o755 });
+    fs.chmodSync(scriptPath, 0o755);
+    return backup;
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  fs.writeFileSync(scriptPath, desiredContents, { mode: 0o755 });
+  fs.chmodSync(scriptPath, 0o755);
+  return null;
+}
+
+function copyExecutable(sourcePath, targetPath) {
+  const contents = fs.readFileSync(sourcePath, 'utf8');
+  const exists = fs.existsSync(targetPath);
+
+  if (exists && fs.readFileSync(targetPath, 'utf8') === contents) {
+    fs.chmodSync(targetPath, 0o755);
+    return false;
+  }
+
+  fs.writeFileSync(targetPath, contents, { mode: 0o755 });
+  fs.chmodSync(targetPath, 0o755);
+  return true;
+}
+
+function installFormatterFiles(repoRoot, installDir) {
+  ensureDir(installDir);
+
+  let updatedCount = 0;
+  for (const fileName of INSTALLED_FILES) {
+    const sourcePath = path.join(repoRoot, fileName);
+    const targetPath = path.join(installDir, fileName);
+    if (copyExecutable(sourcePath, targetPath)) {
+      updatedCount += 1;
+    }
+  }
+
+  return updatedCount;
+}
+
+function main() {
+  const repoRoot = __dirname;
+  const byobuConfigDir = getByobuConfigDir();
+  const statusFile = path.join(byobuConfigDir, 'status');
+  const binDir = path.join(byobuConfigDir, 'bin');
+  const installDir = path.join(binDir, INSTALLED_SCRIPT_DIR);
+  const scriptName = '300_codex_limits';
+  const linkPath = path.join(binDir, scriptName);
+
+  ensureDir(byobuConfigDir);
+  ensureDir(binDir);
+  installFormatterFiles(repoRoot, installDir);
+  ensureStatusFile(statusFile);
+
+  const originalStatus = fs.readFileSync(statusFile, 'utf8');
+  const updatedStatus = enableCustomInTmuxRight(originalStatus);
+  if (updatedStatus !== originalStatus) {
+    fs.writeFileSync(statusFile, updatedStatus);
+  }
+
+  disableLegacyMatchingBackups(binDir, scriptName);
+  const backup = replaceWithWrapper(linkPath);
+
+  process.stdout.write('Installed Byobu Codex status integration.\n');
+  process.stdout.write(`Byobu config dir: ${byobuConfigDir}\n`);
+  process.stdout.write(`Status file: ${statusFile}\n`);
+  process.stdout.write(`Custom script: ${linkPath}\n`);
+  process.stdout.write(`Installed helper dir: ${installDir}\n`);
+  if (backup) {
+    process.stdout.write(`Previous custom script was backed up to: ${backup}\n`);
+  }
+}
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  }
+}
+
+module.exports = {
+  buildWrapperScript,
+  copyExecutable,
+  enableCustomInTmuxRight,
+  installFormatterFiles,
+  resolveByobuDefaultStatus,
+};
